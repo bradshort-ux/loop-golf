@@ -4,12 +4,12 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { EMPTY_WIZARD, STEP_LABELS, WizardState } from './types'
-import Step1Basics from './Step1Basics'
-import Step2Players from './Step2Players'
-import Step3Courses from './Step3Courses'
-import Step4Format from './Step4Format'
-import Step5Schedule from './Step5Schedule'
-import Step6Publish from './Step6Publish'
+import Step1Basics from '../events/[id]/Step1Basics'
+import Step2Players from '../events/[id]/Step2Players'
+import Step3Courses from '../events/[id]/Step3Courses'
+import Step4Format from '../events/[id]/Step4Format'
+import Step5Schedule from '../events/[id]/Step5Schedule'
+import Step6Publish from '../events/[id]/Step6Publish'
 
 export default function NewEventPage() {
   const router = useRouter()
