@@ -1,187 +1,137 @@
-'use client'
+import { createClient } from '@/lib/supabase/server'
+import { notFound } from 'next/navigation'
+import Link from 'next/link'
 
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
-import { EMPTY_WIZARD, STEP_LABELS, WizardState } from './types'
-import Step1Basics from './Step1Basics'
-import Step2Players from './Step2Players'
-import Step3Courses from './Step3Courses'
-import Step4Format from './Step4Format'
-import Step5Schedule from './Step5Schedule'
-import Step6Publish from './Step6Publish'
+export default async function EventManagePage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params
+  const supabase = await createClient()
 
-export default function NewEventPage() {
-  const router = useRouter()
-  const [step, setStep] = useState(0)
-  const [state, setState] = useState<WizardState>(EMPTY_WIZARD)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
+  const { data: event } = await supabase
+    .from('events')
+    .select('*, players(*), courses(*), matches(*)')
+    .eq('id', id)
+    .single()
 
-  function update(partial: Partial<WizardState>) {
-    setState(prev => ({ ...prev, ...partial }))
-  }
+  if (!event) notFound()
 
-  function next() { setStep(s => Math.min(s + 1, 5)) }
-  function back() { setStep(s => Math.max(s - 1, 0)) }
-
-  async function publish() {
-    setSaving(true)
-    setError('')
-
-    try {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) throw new Error('Not signed in')
-
-      // 1. Create event
-      const { data: event, error: eventError } = await supabase
-        .from('events')
-        .insert({
-          owner_id: user.id,
-          name: state.name,
-          location: state.location,
-          start_date: state.start_date || null,
-          end_date: state.end_date || null,
-          status: 'active',
-          slug: state.slug,
-          admin_code: state.admin_code,
-          scorer_code: state.scorer_code,
-          format: {
-            type: state.scoring_type,
-            team_structure: state.team_structure,
-            handicap_method: state.handicap_method,
-            points_per_match: state.points_per_match,
-            skins_enabled: state.skins_enabled,
-            skins_buy_in: state.skins_buy_in,
-            skins_carryover: state.skins_carryover,
-          },
-          payout: {
-            buy_in: state.buy_in,
-          },
-          settings: {
-            color_coding: true,
-            scoring_mode: 'live',
-          },
-        })
-        .select()
-        .single()
-
-      if (eventError) throw eventError
-
-      // 2. Insert players and build id map
-      const playerIdMap: Record<string, string> = {}
-      for (const p of state.players) {
-        const { data: player, error: pErr } = await supabase
-          .from('players')
-          .insert({
-            event_id: event.id,
-            name: p.name,
-            handicap_index: p.handicap_index,
-            home_club: p.home_club,
-            color: p.color,
-            sort_order: state.players.indexOf(p),
-          })
-          .select()
-          .single()
-        if (pErr) throw pErr
-        playerIdMap[p.id] = player.id
-      }
-
-      // 3. Insert courses and build id map
-      const courseIdMap: Record<string, string> = {}
-      for (const c of state.courses) {
-        const { data: course, error: cErr } = await supabase
-          .from('courses')
-          .insert({
-            event_id: event.id,
-            name: c.name,
-            tees: c.tees,
-            rating: c.rating ? parseFloat(c.rating) : null,
-            slope: c.slope ? parseInt(c.slope) : null,
-            holes: c.holes,
-            venue_type: c.venue_type,
-            par: c.hole_data.map(h => h.par),
-            yards: c.hole_data.map(h => h.yards),
-            stroke_index: c.hole_data.map(h => h.stroke_index),
-            sort_order: state.courses.indexOf(c),
-          })
-          .select()
-          .single()
-        if (cErr) throw cErr
-        courseIdMap[c.id] = course.id
-      }
-
-      // 4. Insert matches
-      for (const m of state.matches) {
-        const { error: mErr } = await supabase
-          .from('matches')
-          .insert({
-            event_id: event.id,
-            course_id: courseIdMap[m.course_id] || null,
-            label: m.label,
-            day: m.day,
-            tee_time: m.tee_time || null,
-            hole_start: m.hole_start,
-            hole_end: m.hole_end,
-            pairing_group: m.pairing_group,
-            format: m.format,
-            team1_ids: m.team1_ids.map(id => playerIdMap[id]),
-            team2_ids: m.team2_ids.map(id => playerIdMap[id]),
-            points: m.points,
-            is_finale: m.is_finale,
-            status: 'pending',
-            sort_order: state.matches.indexOf(m),
-          })
-        if (mErr) throw mErr
-      }
-
-      router.push(`/dashboard/events/${event.id}`)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Something went wrong')
-      setSaving(false)
-    }
-  }
-
-  const steps = [
-    <Step1Basics key={0} state={state} update={update} onNext={next} />,
-    <Step2Players key={1} state={state} update={update} onNext={next} onBack={back} />,
-    <Step3Courses key={2} state={state} update={update} onNext={next} onBack={back} />,
-    <Step4Format key={3} state={state} update={update} onNext={next} onBack={back} />,
-    <Step5Schedule key={4} state={state} update={update} onNext={next} onBack={back} />,
-    <Step6Publish key={5} state={state} update={update} onBack={back} onPublish={publish} saving={saving} error={error} />,
-  ]
+  const playerCount = event.players?.length || 0
+  const matchCount = event.matches?.length || 0
+  const totalPoints = event.matches?.reduce((a: number, m: { points: number }) => a + m.points, 0) || 0
 
   return (
-    <div className="max-w-2xl mx-auto">
-      {/* Progress bar */}
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-3">
-          {STEP_LABELS.map((label, i) => (
-            <div key={i} className="flex flex-col items-center gap-1">
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors
-                ${i < step ? 'bg-[#2d7a4f] text-white' :
-                  i === step ? 'bg-[#071428] text-[#c8a84b] border-2 border-[#c8a84b]' :
-                  'bg-slate-200 text-slate-400'}`}>
-                {i < step ? '✓' : i + 1}
-              </div>
-              <span className={`text-xs hidden sm:block ${i === step ? 'text-[#071428] font-semibold' : 'text-slate-400'}`}>
-                {label}
-              </span>
-            </div>
-          ))}
+    <div>
+      {/* Header */}
+      <div className="flex items-start justify-between mb-8">
+        <div>
+          <Link href="/dashboard" className="text-xs text-slate-400 hover:text-slate-600 mb-2 block">← My Events</Link>
+          <h1 className="text-2xl font-bold text-[#071428]">{event.name}</h1>
+          <p className="text-slate-500 text-sm mt-1">
+            {event.location && <span className="mr-3">📍 {event.location}</span>}
+            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize
+              ${event.status === 'active' ? 'bg-green-100 text-green-700' :
+                event.status === 'draft' ? 'bg-slate-100 text-slate-600' :
+                'bg-blue-100 text-blue-700'}`}>
+              {event.status}
+            </span>
+          </p>
         </div>
-        <div className="w-full bg-slate-200 rounded-full h-1.5">
-          <div
-            className="bg-[#c8a84b] h-1.5 rounded-full transition-all duration-300"
-            style={{ width: `${((step) / (STEP_LABELS.length - 1)) * 100}%` }}
-          />
+        <Link
+          href={`/e/${event.slug}`}
+          target="_blank"
+          className="text-sm border border-[#c8a84b]/40 text-[#c8a84b] hover:border-[#c8a84b] px-4 py-2 rounded-lg transition-colors font-medium"
+        >
+          View event ↗
+        </Link>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-4 mb-8">
+        {[
+          { label: 'Players', value: playerCount },
+          { label: 'Matches', value: matchCount },
+          { label: 'Total points', value: totalPoints },
+        ].map(stat => (
+          <div key={stat.label} className="bg-white border border-slate-200 rounded-xl p-4 text-center">
+            <div className="text-2xl font-bold text-[#071428]">{stat.value}</div>
+            <div className="text-xs text-slate-500 mt-1 uppercase tracking-widest">{stat.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Event URL */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-6">
+        <div className="text-xs font-semibold tracking-widest uppercase text-slate-500 mb-2">Event URL</div>
+        <div className="flex items-center gap-3">
+          <code className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-[#071428]">
+            {typeof window !== 'undefined' ? window.location.origin : 'https://loop-golf-psi.vercel.app'}/e/{event.slug}
+          </code>
+          <Link
+            href={`/e/${event.slug}`}
+            target="_blank"
+            className="text-xs text-[#c8a84b] border border-[#c8a84b]/40 px-3 py-2 rounded-lg hover:border-[#c8a84b] transition-colors whitespace-nowrap"
+          >
+            Open ↗
+          </Link>
+        </div>
+        <p className="text-xs text-slate-400 mt-2">Share this link with your group</p>
+      </div>
+
+      {/* Access codes */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-6">
+        <div className="text-xs font-semibold tracking-widest uppercase text-slate-500 mb-3">Access codes</div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <div className="text-xs text-slate-400 mb-1">Admin code</div>
+            <code className="text-sm font-mono text-[#071428]">{event.admin_code || '—'}</code>
+          </div>
+          <div>
+            <div className="text-xs text-slate-400 mb-1">Scorer code</div>
+            <code className="text-sm font-mono text-[#071428]">{event.scorer_code || '—'}</code>
+          </div>
         </div>
       </div>
 
-      {/* Step content */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 sm:p-8">
-        {steps[step]}
+      {/* Players */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-6">
+        <div className="text-xs font-semibold tracking-widest uppercase text-slate-500 mb-3">Players</div>
+        <div className="space-y-2">
+          {event.players?.map((p: { id: string; color: string; name: string; handicap_index: number | null; home_club: string | null }) => (
+            <div key={p.id} className="flex items-center gap-3 py-1">
+              <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: p.color || '#666' }} />
+              <span className="text-sm font-medium text-[#071428]">{p.name}</span>
+              {p.handicap_index !== null && (
+                <span className="text-xs text-slate-400">HCP {p.handicap_index}</span>
+              )}
+              {p.home_club && (
+                <span className="text-xs text-slate-400 ml-auto">{p.home_club}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Matches */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <div className="text-xs font-semibold tracking-widest uppercase text-slate-500 mb-3">Matches</div>
+        <div className="space-y-2">
+          {event.matches?.map((m: { id: string; label: string; day: string | null; tee_time: string | null; points: number; is_finale: boolean; status: string }) => (
+            <div key={m.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-[#071428]">{m.label}</span>
+                {m.is_finale && <span className="text-xs bg-[#c8a84b] text-[#071428] font-bold px-1.5 py-0.5 rounded">FINALE</span>}
+              </div>
+              <div className="flex items-center gap-3 text-xs text-slate-400">
+                {m.day && <span>{m.day}</span>}
+                {m.tee_time && <span>{m.tee_time}</span>}
+                <span className="font-medium text-[#071428]">{m.points} pt{m.points !== 1 ? 's' : ''}</span>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
